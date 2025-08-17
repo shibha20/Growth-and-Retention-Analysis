@@ -1,0 +1,51 @@
+The homework this week will be using the `players`, `players_scd`, and `player_seasons` tables from week 1
+
+
+- A query that does state change tracking for `players`
+ - A player entering the league should be `New`
+ - A player leaving the league should be `Retired`
+ - A player staying in the league should be `Continued Playing`
+ - A player that comes out of retirement should be `Returned from Retirement`
+ - A player that stays out of the league should be `Stayed Retired`
+
+
+
+
+
+
+-- Modify this to unnest
+WITH unnested AS (
+    -- Unnest the seasons array for each player to get individual season stats
+	SELECT *, UNNEST(seasons)::season_stats AS season_stats
+	FROM players
+), 
+yesterday AS (
+    -- Get distinct player_name and the season (as integer) for year 2005
+	SELECT DISTINCT player_name, CAST((season_stats :: season_stats).season AS INT) AS playyear 
+    FROM unnested p
+	WHERE CAST((season_stats :: season_stats).season AS INT) = 2005
+), 
+today AS (
+    -- Get distinct player_name and the season (as integer) for year 2006
+	SELECT DISTINCT player_name, CAST((season_stats :: season_stats).season AS INT) AS playyear 
+    FROM unnested p
+	WHERE CAST((season_stats :: season_stats).season AS INT) = 2006
+)
+
+
+-- Combine yesterday and today data to track player state changes
+SELECT 
+    COALESCE(y.player_name, t.player_name) AS player_name,  -- Use whichever player_name exists
+    CASE 
+        WHEN y.player_name IS NULL THEN 'New'  -- Player appears in today but not yesterday
+        WHEN t.player_name IS NULL AND y.player_name IS NOT NULL THEN 'Stayed Retired'  -- Player was absent today but existed yesterday
+        WHEN t.player_name IS NULL THEN 'Retired'  -- Player existed yesterday but not today
+        WHEN t.player_name IS NOT NULL AND t.playyear - y.playyear = 1 THEN 'Continued Playing'  -- Player continued without gap
+        WHEN t.player_name IS NOT NULL AND t.playyear - y.playyear > 1 THEN 'Returned from Retirement'  -- Player returned after missing seasons
+    END AS player_status
+FROM today t
+FULL JOIN yesterday y
+    ON t.player_name = y.player_name  -- Join on player_name to compare seasons
+ORDER BY 1;  -- Order by player_name
+
+
