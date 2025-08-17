@@ -1,0 +1,30 @@
+-- Step 1: Create a CTE with LeBron's game scores and look at previous and next games
+WITH newdayscore AS (
+	SELECT 
+		gd.game_id,                 -- Unique ID of the game
+		gd.player_name,             -- Player name (LeBron James)
+		gd.pts,                     -- Points scored in this game
+		g.game_date_est,            -- Date of the game
+		LEAD(pts,1) OVER(           -- Points in the next game
+			PARTITION BY player_name -- Partition by player
+			ORDER BY game_date_est   -- Order chronologically
+		) AS new_score,
+		LAG(pts,1) OVER(            -- Points in the previous game
+			PARTITION BY player_name -- Partition by player
+			ORDER BY game_date_est   -- Order chronologically
+		) AS prev_score
+	FROM game_details gd
+	LEFT JOIN games g ON gd.game_id = g.game_id -- Join to get game date
+	WHERE player_name = 'LeBron James'           -- Only include LeBron James' games
+)
+
+-- Step 2: Count all games that are part of consecutive >10-point sequences
+SELECT 
+	'Number of Games with Consecutive Score Over Ten' AS metricname, -- Label for output
+	COUNT(*)                                                        -- Count of qualifying games
+FROM newdayscore
+WHERE 
+	(new_score > 10 AND pts > 10)  -- Current game and next game both >10
+	OR 
+	(pts > 10 AND prev_score > 10) -- Current game and previous game both >10
+;
