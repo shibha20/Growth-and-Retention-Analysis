@@ -1,94 +1,95 @@
- - A query that uses `GROUPING SETS` to do efficient aggregations of `game_details` data
- - Aggregate this dataset along the following dimensions
-   - player and team
-     - Answer questions like who scored the most points playing for one team?
-   - player and season
-     - Answer questions like who scored the most points in one season?
-   - team
-     - Answer questions like which team has won the most games?
-    
-
-
-
-
-WITH agg AS (
+WITH team_points AS (
+    -- Compute total points scored by each team in each game
+    SELECT game_id, team_id, SUM(pts) AS total_points
+    FROM game_details
+    GROUP BY game_id, team_id
+),
+winningteam AS (
+    -- Identify the winning team for each game
+    SELECT game_id, team_id
+    FROM (
+        SELECT *,
+               RANK() OVER (PARTITION BY game_id ORDER BY total_points DESC) AS rn
+        FROM team_points
+    ) t
+    WHERE rn = 1  -- only keep the top-ranked (highest points) team per game
+),
+agg AS (
+    -- Aggregate stats at different levels using GROUPING SETS
     SELECT 
-        player_id,
-        team_id,
-        season,
-        SUM(COALESCE(pts, 0)) AS total_points,
-        SUM(COALESCE(plus_minus, 0)) AS total_victory,
-        GROUPING(player_id) AS g_player,
-        GROUPING(team_id) AS g_team,
-        GROUPING(season) AS g_season
+        gd.player_id,
+        gd.team_id,
+        g.season,
+        SUM(COALESCE(gd.pts,0)) AS total_points,  -- total points for the group
+        COUNT(w.team_id) AS total_victory,         -- count of games won by the team
+        GROUPING(gd.player_id) AS g_player,        -- indicates if player_id is aggregated
+        GROUPING(gd.team_id) AS g_team,            -- indicates if team_id is aggregated
+        GROUPING(g.season) AS g_season             -- indicates if season is aggregated
     FROM game_details gd
-    LEFT JOIN games g ON gd.game_id = g.game_id
+    JOIN games g ON gd.game_id = g.game_id
+    LEFT JOIN winningteam w 
+           ON gd.team_id = w.team_id AND gd.game_id = w.game_id
     GROUP BY GROUPING SETS (
-        (player_id, team_id),    -- player & team
-        (player_id, season),     -- player & season
-        (team_id)                -- team only
+        (gd.player_id, gd.team_id),   -- player & team level
+        (gd.player_id, g.season),     -- player & season level
+        (gd.team_id)                  -- team only
     )
-)
-
-
--- 1️⃣ Player & Team: top scorer per team
-, player_team_top AS (
+),
+player_team_top AS (
+    -- Top scorer for each team
     SELECT *
     FROM (
         SELECT *,
                ROW_NUMBER() OVER (PARTITION BY team_id ORDER BY total_points DESC) AS rn
         FROM agg
-        WHERE g_player = 0 AND g_team = 0 AND g_season = 1   -- (player_id, team_id) grouping
+        WHERE g_player = 0 AND g_team = 0 AND g_season = 1  -- select player & team level rows
     ) t
-    WHERE rn = 1
-)
--- 2️⃣ Player & Season: top scorer per season
-, player_season_top AS (
+    WHERE rn = 1  -- pick top scorer per team
+),
+player_season_top AS (
+    -- Top scorer for each season
     SELECT *
     FROM (
         SELECT *,
                ROW_NUMBER() OVER (PARTITION BY season ORDER BY total_points DESC) AS rn
         FROM agg
-        WHERE g_player = 0 AND g_team = 1 AND g_season = 0   -- (player_id, season) grouping
+        WHERE g_player = 0 AND g_team = 1 AND g_season = 0  -- select player & season level rows
     ) t
-    WHERE rn = 1
-)
--- 3️⃣ Team: team with most wins
-, team_top AS (
+    WHERE rn = 1  -- pick top scorer per season
+),
+team_top AS (
+    -- Team with most wins overall
     SELECT *
     FROM (
         SELECT *,
                ROW_NUMBER() OVER (ORDER BY total_victory DESC) AS rn
         FROM agg
-        WHERE g_player = 1 AND g_team = 0 AND g_season = 1   -- (team_id) grouping
+        WHERE g_player = 1 AND g_team = 0 AND g_season = 1  -- select team-only rows
     ) t
-    WHERE rn = 1
+    WHERE rn = 1  -- pick team with most victories
 )
+-- Final combined result
 SELECT 'Player & Team Top Scorer' AS metric, 
        team_id, 
        player_id, 
-       NULL AS season,        -- season not relevant here
+       NULL AS season, 
        total_points
 FROM player_team_top
 
-
 UNION ALL
 
-
-SELECT 'Player & Season Top Scorer', 
-       NULL AS team_id, 
-       player_id, 
-       season,               -- include season
+SELECT 'Player & Season Top Scorer',
+       NULL AS team_id,
+       player_id,
+       season,
        total_points
 FROM player_season_top
 
-
 UNION ALL
 
-
-SELECT 'Team with Most Wins', 
-       team_id, 
-       NULL AS player_id, 
-       NULL AS season,       -- season not relevant
+SELECT 'Team with Most Wins',
+       team_id,
+       NULL AS player_id,
+       NULL AS season,
        total_victory AS total_points
 FROM team_top;
