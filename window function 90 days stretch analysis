@@ -1,0 +1,63 @@
+- A query that uses window functions on `game_details` to find out the following things:
+ - What is the most games a team has won in a 90 game stretch?
+
+WITH team_points AS (
+    -- Compute total points per game per team
+    SELECT 
+        game_id, 
+        team_id, 
+        SUM(pts) AS total_points
+    FROM game_details
+    GROUP BY game_id, team_id
+),
+winningteam AS (
+    -- Identify winning team per game
+    SELECT game_id, team_id
+    FROM (
+        SELECT *,
+               RANK() OVER (PARTITION BY game_id ORDER BY total_points DESC) AS rn
+        FROM team_points
+    ) t
+    WHERE rn = 1  -- rank 1 is the team with highest points in a game
+), 
+distinctgames AS (
+    -- Get all games per team with date
+	SELECT DISTINCT 
+        g.game_id,
+        gd.team_id,
+        g.game_date_est
+	FROM games g 
+	LEFT JOIN game_details gd
+	    ON g.game_id = gd.game_id
+), 
+numberinggames AS (
+    -- Number the games for each team in chronological order
+	SELECT 
+        d.team_id,
+        d.game_date_est,
+        CASE WHEN w.team_id IS NOT NULL THEN 1 ELSE 0 END AS winningteam,
+        ROW_NUMBER() OVER(PARTITION BY d.team_id ORDER BY d.game_date_est) AS stretch
+	FROM distinctgames d
+	LEFT JOIN winningteam w 
+	    ON d.game_id = w.game_id
+	    AND d.team_id = w.team_id
+),
+totalwinsin90days AS (
+    -- Sum wins for every 90-game stretch per team
+	SELECT
+	    team_id,
+	    CEIL(stretch / 90.0) AS group_number,  -- divide into stretches of 90 games
+	    SUM(winningteam) AS total_value        -- count wins in this stretch
+	FROM numberinggames
+	GROUP BY team_id, CEIL(stretch / 90.0)
+	ORDER BY team_id, group_number
+)
+
+-- Get the maximum wins any team has in a 90-game stretch
+SELECT 
+    'Most wins for a team in a 90 games stretch' AS metric_name,
+    team_id,
+    total_value
+FROM totalwinsin90days 
+ORDER BY total_value DESC 
+LIMIT 1;  -- top 1 team
